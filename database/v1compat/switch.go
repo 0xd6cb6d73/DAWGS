@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"sync"
+
+	"github.com/specterops/dawgs/database"
 )
 
 var (
@@ -49,6 +51,13 @@ func NewDatabaseSwitch(ctx context.Context, initialDB Database) *DatabaseSwitch 
 		ctxLock:        &sync.Mutex{},
 		currentDBLock:  &sync.RWMutex{},
 	}
+}
+
+func (s *DatabaseSwitch) V2() database.Instance {
+	s.currentDBLock.RLock()
+	defer s.currentDBLock.RUnlock()
+
+	return s.currentDB.V2()
 }
 
 func (s *DatabaseSwitch) SetDefaultGraph(ctx context.Context, graphSchema Graph) error {

@@ -46,6 +46,12 @@ func sampleHighestDegrees(digraph container.DirectedGraph, nSamples int, directi
 	return nodeSamples
 }
 
+func SampleExact(samples []uint64) SampleFunc {
+	return func(digraph container.DirectedGraph, nSamples int) []uint64 {
+		return samples
+	}
+}
+
 func SampleHighestDegrees(direction graph.Direction) SampleFunc {
 	return func(digraph container.DirectedGraph, nSamples int) []uint64 {
 		return sampleHighestDegrees(digraph, nSamples, direction)

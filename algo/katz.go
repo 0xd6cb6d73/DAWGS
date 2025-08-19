@@ -1,11 +1,13 @@
 package algo
 
 import (
+	"log/slog"
 	"maps"
 	"math"
 
 	"github.com/specterops/dawgs/container"
 	"github.com/specterops/dawgs/graph"
+	"github.com/specterops/dawgs/util"
 )
 
 /*
@@ -31,12 +33,14 @@ High katz centrality values indicate that a node has significant influence withi
 edges, as well as direct ones. The centrality score also accounts for the declining importance of more distant
 relationships.
 */
-func CalculateKatzCentrality(digraph container.DirectedGraph, alpha, beta, epsilon Weight, iterations int) (map[uint64]float64, bool) {
+func CalculateKatzCentrality(digraph container.DirectedGraph, alpha, beta, epsilon Weight, iterations int, direction graph.Direction) (map[uint64]Weight, bool) {
 	var (
 		numNodes       = digraph.Nodes().Cardinality()
-		centrality     = make(map[uint64]float64, numNodes)
-		prevCentrality = make(map[uint64]float64, numNodes)
+		centrality     = make(map[uint64]Weight, numNodes)
+		prevCentrality = make(map[uint64]Weight, numNodes)
 	)
+
+	defer util.SLogMeasure("CalculateKatzCentrality", slog.String("direction", direction.String()))()
 
 	// Initialize centrality scores to baseline
 	digraph.Nodes().Each(func(value uint64) bool {
@@ -52,15 +56,21 @@ func CalculateKatzCentrality(digraph container.DirectedGraph, alpha, beta, epsil
 		digraph.Nodes().Each(func(sourceNode uint64) bool {
 			sum := 0.0
 
-			digraph.EachAdjacent(sourceNode, graph.DirectionBoth, func(adjacentNode uint64) bool {
+			digraph.EachAdjacentNode(sourceNode, direction, func(adjacentNode uint64) bool {
 				sum += prevCentrality[adjacentNode]
 				return true
 			})
 
 			centrality[sourceNode] = beta + alpha*sum
 
-			if math.Abs(centrality[sourceNode]-prevCentrality[sourceNode]) > epsilon {
-				changed = true
+			// Only calculate epsilon tolerance if there is no tolerance violation yet detected
+			if !changed {
+				diff := math.Abs(centrality[sourceNode] - prevCentrality[sourceNode])
+				changed = diff > epsilon
+
+				if changed {
+					slog.Info("Tolerance Check Failure", slog.Float64("diff", diff), slog.Float64("epsilon", epsilon), slog.Uint64("src_node", sourceNode))
+				}
 			}
 
 			return true

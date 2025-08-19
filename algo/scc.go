@@ -3,12 +3,16 @@ package algo
 import (
 	"math"
 
+	"github.com/gammazero/deque"
 	"github.com/specterops/dawgs/cardinality"
 	"github.com/specterops/dawgs/container"
 	"github.com/specterops/dawgs/graph"
+	"github.com/specterops/dawgs/util"
 )
 
-func StronglyConnectedComponents(digraph container.DirectedGraph, direction graph.Direction) ([]cardinality.Duplex[uint64], map[uint64]int) {
+func StronglyConnectedComponents(digraph container.DirectedGraph) ([]cardinality.Duplex[uint64], map[uint64]uint64) {
+	defer util.SLogMeasure("StronglyConnectedComponents")()
+
 	type descentCursor struct {
 		id        uint64
 		branches  []uint64
@@ -26,7 +30,7 @@ func StronglyConnectedComponents(digraph container.DirectedGraph, direction grap
 		stack                       = make([]uint64, 0, initialAlloc)
 		dfsDescentStack             = make([]*descentCursor, 0, initialAlloc)
 		stronglyConnectedComponents = make([]cardinality.Duplex[uint64], 0, initialAlloc)
-		nodeToSCCIndex              = make(map[uint64]int, numNodes)
+		nodeToSCCIndex              = make(map[uint64]uint64, numNodes)
 	)
 
 	digraph.EachNode(func(node uint64) bool {
@@ -36,7 +40,7 @@ func StronglyConnectedComponents(digraph container.DirectedGraph, direction grap
 
 		dfsDescentStack = append(dfsDescentStack, &descentCursor{
 			id:        node,
-			branches:  digraph.Adjacent(node, direction),
+			branches:  digraph.AdjacentNodes(node, graph.DirectionOutbound),
 			branchIdx: 0,
 		})
 
@@ -70,7 +74,7 @@ func StronglyConnectedComponents(digraph container.DirectedGraph, direction grap
 
 					dfsDescentStack = append(dfsDescentStack, &descentCursor{
 						id:        nextBranchID,
-						branches:  digraph.Adjacent(nextBranchID, direction),
+						branches:  digraph.AdjacentNodes(nextBranchID, graph.DirectionOutbound),
 						branchIdx: 0,
 					})
 				} else if onStack.Contains(nextBranchID) {
@@ -84,7 +88,7 @@ func StronglyConnectedComponents(digraph container.DirectedGraph, direction grap
 				if lowLinks[nextCursor.id] == visitedIndex[nextCursor.id] {
 					var (
 						scc   = cardinality.NewBitmap64()
-						sccID = len(stronglyConnectedComponents)
+						sccID = uint64(len(stronglyConnectedComponents))
 					)
 
 					for {
@@ -115,34 +119,177 @@ func StronglyConnectedComponents(digraph container.DirectedGraph, direction grap
 	return stronglyConnectedComponents, nodeToSCCIndex
 }
 
-type ComponentDirectedGraph struct {
-	Components                 []cardinality.Duplex[uint64]
-	OriginNodeToComponentIndex map[uint64]int
-	Digraph                    container.DirectedGraph
+type ComponentGraph struct {
+	componentMembers      []cardinality.Duplex[uint64]
+	memberComponentLookup map[uint64]uint64
+	digraph               container.DirectedGraph
 }
 
-func NewComponentDirectedGraph(digraph container.DirectedGraph, direction graph.Direction) ComponentDirectedGraph {
-	var (
-		components, nodeToComponentIndex = StronglyConnectedComponents(digraph, direction)
-		componentDigraph                 = container.NewDirectedGraph()
-	)
+func (s ComponentGraph) Digraph() container.DirectedGraph {
+	return s.digraph
+}
 
-	// Ensure all components are present as vertices, even if they have no edges
-	for idx := range components {
-		componentDigraph.Nodes().CheckedAdd(uint64(idx))
+func (s ComponentGraph) ContainingComponent(memberID uint64) (uint64, bool) {
+	component, inComponentDigraph := s.memberComponentLookup[memberID]
+	return component, inComponentDigraph
+}
+
+func (s ComponentGraph) CollectComponentMembers(componentID uint64, members cardinality.Duplex[uint64]) {
+	members.Or(s.componentMembers[componentID])
+}
+
+func (s ComponentGraph) ComponentSearch(startComponent, endComponent uint64) bool {
+	if startComponent == endComponent {
+		return true
 	}
 
-	digraph.EachNode(func(node uint64) bool {
-		nodeComponent := graph.ID(nodeToComponentIndex[node])
+	var (
+		traversals deque.Deque[uint64]
+		visited    = cardinality.NewBitmap64()
+		reachable  = false
+	)
 
-		digraph.EachAdjacent(node, direction, func(adjacent uint64) bool {
-			if adjacentComponent := graph.ID(nodeToComponentIndex[adjacent]); nodeComponent != adjacentComponent {
-				switch direction {
-				case graph.DirectionInbound:
-					componentDigraph.AddEdge(adjacentComponent, nodeComponent)
-				case graph.DirectionOutbound:
-					componentDigraph.AddEdge(nodeComponent, adjacentComponent)
+	traversals.PushBack(startComponent)
+
+	for remainingTraversals := traversals.Len(); !reachable && remainingTraversals > 0; remainingTraversals = traversals.Len() {
+		nextComponent := traversals.PopFront()
+
+		s.digraph.EachAdjacentNode(nextComponent, graph.DirectionOutbound, func(adjacentComponent uint64) bool {
+			reachable = adjacentComponent == endComponent
+
+			if !reachable {
+				if visited.CheckedAdd(adjacentComponent) {
+					traversals.PushBack(adjacentComponent)
 				}
+			}
+
+			return !reachable
+		})
+	}
+
+	return reachable
+}
+
+func (s ComponentGraph) ComponentReachable(startComponent, endComponent uint64) bool {
+	if startComponent == endComponent {
+		return true
+	}
+
+	var (
+		outboundQueue      deque.Deque[uint64]
+		inboundQueue       deque.Deque[uint64]
+		outboundComponents = cardinality.NewBitmap64()
+		inboundComponents  = cardinality.NewBitmap64()
+		visitedComponents  = cardinality.NewBitmap64()
+		reachable          = false
+	)
+
+	outboundQueue.PushBack(startComponent)
+	outboundComponents.Add(startComponent)
+
+	inboundQueue.PushBack(endComponent)
+	inboundComponents.Add(endComponent)
+
+	for !reachable {
+		var (
+			outboundQueueLen = outboundQueue.Len()
+			inboundQueueLen  = inboundQueue.Len()
+		)
+
+		if outboundQueueLen > 0 && outboundQueueLen <= inboundQueueLen {
+			nextComponent := outboundQueue.PopFront()
+
+			if !visitedComponents.CheckedAdd(nextComponent) {
+				continue
+			}
+
+			s.digraph.EachAdjacentNode(nextComponent, graph.DirectionOutbound, func(adjacentComponent uint64) bool {
+				if outboundComponents.CheckedAdd(adjacentComponent) {
+					// Haven't seen this component yet, append to the traversal queue and check for reachability
+					outboundQueue.PushBack(adjacentComponent)
+					reachable = inboundComponents.Contains(adjacentComponent)
+				}
+
+				// Continue iterating if not reachable
+				return !reachable
+			})
+		} else if inboundQueueLen > 0 {
+			nextComponent := inboundQueue.PopFront()
+
+			s.digraph.EachAdjacentNode(nextComponent, graph.DirectionInbound, func(adjacentComponent uint64) bool {
+				if inboundComponents.CheckedAdd(adjacentComponent) {
+					// Haven't seen this component yet, append to the traversal queue and check for reachability
+					inboundQueue.PushBack(adjacentComponent)
+					reachable = outboundComponents.Contains(adjacentComponent)
+				}
+
+				// Continue iterating if not reachable
+				return !reachable
+			})
+		} else {
+			// No more expansions remain
+			break
+		}
+	}
+
+	return reachable
+}
+
+func (s ComponentGraph) ComponentHistogram(originNodes []uint64) map[uint64]uint64 {
+	histogram := map[uint64]uint64{}
+
+	for _, originNode := range originNodes {
+		if component, inComponent := s.ContainingComponent(originNode); inComponent {
+			histogram[component] += 1
+		}
+	}
+
+	return histogram
+}
+
+func (s ComponentGraph) OriginReachable(startID, endID uint64) bool {
+	var (
+		startComponent, startInComponent = s.ContainingComponent(startID)
+		endComponent, endInComponent     = s.ContainingComponent(endID)
+	)
+
+	if !startInComponent || !endInComponent {
+		return false
+	}
+
+	return s.ComponentReachable(startComponent, endComponent)
+}
+
+func NewComponentGraph(originGraph container.DirectedGraph) ComponentGraph {
+	var (
+		componentMembers, memberComponentLookup = StronglyConnectedComponents(originGraph)
+		componentDigraph                        = container.NewAdjacencyMapGraph()
+		nextEdgeID                              = uint64(1)
+	)
+
+	defer util.SLogMeasure("NewComponentGraph")()
+
+	// Ensure all components are present as vertices, even if they have no edges
+	for componentID := range componentMembers {
+		componentDigraph.Nodes().Add(uint64(componentID))
+	}
+
+	originGraph.EachNode(func(node uint64) bool {
+		nodeComponent := memberComponentLookup[node]
+
+		originGraph.EachAdjacentNode(node, graph.DirectionInbound, func(adjacent uint64) bool {
+			if adjacentComponent := memberComponentLookup[adjacent]; nodeComponent != adjacentComponent {
+				componentDigraph.AddEdge(nextEdgeID, adjacentComponent, nodeComponent)
+				nextEdgeID += 1
+			}
+
+			return true
+		})
+
+		originGraph.EachAdjacentNode(node, graph.DirectionOutbound, func(adjacent uint64) bool {
+			if adjacentComponent := memberComponentLookup[adjacent]; nodeComponent != adjacentComponent {
+				componentDigraph.AddEdge(nextEdgeID, nodeComponent, adjacentComponent)
+				nextEdgeID += 1
 			}
 
 			return true
@@ -151,9 +298,9 @@ func NewComponentDirectedGraph(digraph container.DirectedGraph, direction graph.
 		return true
 	})
 
-	return ComponentDirectedGraph{
-		Components:                 components,
-		OriginNodeToComponentIndex: nodeToComponentIndex,
-		Digraph:                    componentDigraph,
+	return ComponentGraph{
+		componentMembers:      componentMembers,
+		memberComponentLookup: memberComponentLookup,
+		digraph:               componentDigraph,
 	}
 }

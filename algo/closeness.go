@@ -6,13 +6,14 @@ import (
 
 	"github.com/specterops/dawgs/container"
 	"github.com/specterops/dawgs/graph"
+	"github.com/specterops/dawgs/util"
 )
 
 func ClosenessForDirectedUnweightedGraph(digraph container.DirectedGraph, direction graph.Direction, sampleFunc SampleFunc, nSamples int) map[uint64]Weight {
 	scores := make(map[uint64]Weight, nSamples)
 
 	for _, nodeID := range sampleFunc(digraph, nSamples) {
-		if shortestPathTerminals := digraph.BFSTree(nodeID, direction); len(shortestPathTerminals) > 0 {
+		if shortestPathTerminals := container.BFSTree(digraph, nodeID, direction); len(shortestPathTerminals) > 0 {
 			var distanceSum Weight = 0
 
 			for _, shortestPathTerminal := range shortestPathTerminals {
@@ -29,13 +30,15 @@ func ClosenessForDirectedUnweightedGraph(digraph container.DirectedGraph, direct
 	return scores
 }
 
-func ClosenessForDirectedUnweightedGraphParallel(digraph container.DirectedGraph, direction graph.Direction, sampleFunc SampleFunc, nSamples int) map[uint64]Weight {
+func ClosenessForDirectedUnweightedGraphParallel(digraph container.DirectedGraph, direction graph.Direction, sampleFunc SampleFunc, nSamples int) WeightMap {
 	var (
-		scores     = make(map[uint64]Weight, nSamples)
+		scores     = make(WeightMap, nSamples)
 		scoresLock = &sync.Mutex{}
 		workerWG   = &sync.WaitGroup{}
 		nodeC      = make(chan uint64)
 	)
+
+	defer util.SLogMeasure("ClosenessForDirectedUnweightedGraphParallel")()
 
 	for workerID := 0; workerID < runtime.NumCPU(); workerID++ {
 		workerWG.Add(1)
@@ -44,7 +47,7 @@ func ClosenessForDirectedUnweightedGraphParallel(digraph container.DirectedGraph
 			defer workerWG.Done()
 
 			for nodeID := range nodeC {
-				if shortestPathTerminals := digraph.BFSTree(nodeID, direction); len(shortestPathTerminals) > 0 {
+				if shortestPathTerminals := container.BFSTree(digraph, nodeID, direction); len(shortestPathTerminals) > 0 {
 					var distanceSum Weight = 0
 
 					for _, shortestPathTerminal := range shortestPathTerminals {
