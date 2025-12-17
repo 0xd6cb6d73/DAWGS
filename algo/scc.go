@@ -1,6 +1,7 @@
 package algo
 
 import (
+	"context"
 	"math"
 
 	"github.com/gammazero/deque"
@@ -10,7 +11,7 @@ import (
 	"github.com/specterops/dawgs/util"
 )
 
-func StronglyConnectedComponents(digraph container.DirectedGraph) ([]cardinality.Duplex[uint64], map[uint64]uint64) {
+func StronglyConnectedComponents(ctx context.Context, digraph container.DirectedGraph) ([]cardinality.Duplex[uint64], map[uint64]uint64) {
 	defer util.SLogMeasure("StronglyConnectedComponents")()
 
 	type descentCursor struct {
@@ -34,86 +35,84 @@ func StronglyConnectedComponents(digraph container.DirectedGraph) ([]cardinality
 	)
 
 	digraph.EachNode(func(node uint64) bool {
-		if _, visited := visitedIndex[node]; visited {
-			return true
-		}
+		if _, visited := visitedIndex[node]; !visited {
+			dfsDescentStack = append(dfsDescentStack, &descentCursor{
+				id:        node,
+				branches:  digraph.AdjacentNodes(node, graph.DirectionOutbound),
+				branchIdx: 0,
+			})
 
-		dfsDescentStack = append(dfsDescentStack, &descentCursor{
-			id:        node,
-			branches:  digraph.AdjacentNodes(node, graph.DirectionOutbound),
-			branchIdx: 0,
-		})
+			for len(dfsDescentStack) > 0 {
+				nextCursor := dfsDescentStack[len(dfsDescentStack)-1]
 
-		for len(dfsDescentStack) > 0 {
-			nextCursor := dfsDescentStack[len(dfsDescentStack)-1]
+				if nextCursor.branchIdx == 0 {
+					// First visit of this node
+					visitedIndex[nextCursor.id] = index
+					lowLinks[nextCursor.id] = index
+					index += 1
 
-			if nextCursor.branchIdx == 0 {
-				// First visit of this node
-				visitedIndex[nextCursor.id] = index
-				lowLinks[nextCursor.id] = index
-				index += 1
-
-				stack = append(stack, nextCursor.id)
-				onStack.Add(nextCursor.id)
-			} else if lastSearchedNodeID != nextCursor.id {
-				// Revisiting this node from a descending DFS
-				lowLinks[nextCursor.id] = min(lowLinks[nextCursor.id], lowLinks[lastSearchedNodeID])
-			}
-
-			// Set to the current cursor ID for ascent
-			lastSearchedNodeID = nextCursor.id
-
-			if nextCursor.branchIdx < len(nextCursor.branches) {
-				// Advance to the next branch
-				nextBranchID := nextCursor.branches[nextCursor.branchIdx]
-				nextCursor.branchIdx += 1
-
-				if _, visited := visitedIndex[nextBranchID]; !visited {
-					// This node has not been visited yet, run a DFS for it
-					lastSearchedNodeID = nextBranchID
-
-					dfsDescentStack = append(dfsDescentStack, &descentCursor{
-						id:        nextBranchID,
-						branches:  digraph.AdjacentNodes(nextBranchID, graph.DirectionOutbound),
-						branchIdx: 0,
-					})
-				} else if onStack.Contains(nextBranchID) {
-					// Branch is on the traversal stack; hence it is also in the current SCC
-					lowLinks[nextCursor.id] = min(lowLinks[nextCursor.id], visitedIndex[nextBranchID])
+					stack = append(stack, nextCursor.id)
+					onStack.Add(nextCursor.id)
+				} else if lastSearchedNodeID != nextCursor.id {
+					// Revisiting this node from a descending DFS
+					lowLinks[nextCursor.id] = min(lowLinks[nextCursor.id], lowLinks[lastSearchedNodeID])
 				}
-			} else {
-				// Finished visiting branches; exiting node
-				dfsDescentStack = dfsDescentStack[:len(dfsDescentStack)-1]
 
-				if lowLinks[nextCursor.id] == visitedIndex[nextCursor.id] {
-					var (
-						scc   = cardinality.NewBitmap64()
-						sccID = uint64(len(stronglyConnectedComponents))
-					)
+				// Set to the current cursor ID for ascent
+				lastSearchedNodeID = nextCursor.id
 
-					for {
-						// Unwind the stack to the root of the component
-						currentNode := stack[len(stack)-1]
-						stack = stack[:len(stack)-1]
+				if nextCursor.branchIdx < len(nextCursor.branches) {
+					// Advance to the next branch
+					nextBranchID := nextCursor.branches[nextCursor.branchIdx]
+					nextCursor.branchIdx += 1
 
-						onStack.Remove(currentNode)
+					if _, visited := visitedIndex[nextBranchID]; !visited {
+						// This node has not been visited yet, run a DFS for it
+						lastSearchedNodeID = nextBranchID
 
-						scc.Add(currentNode)
-
-						// Reverse index origin node to SCC
-						nodeToSCCIndex[currentNode] = sccID
-
-						if currentNode == nextCursor.id {
-							break
-						}
+						dfsDescentStack = append(dfsDescentStack, &descentCursor{
+							id:        nextBranchID,
+							branches:  digraph.AdjacentNodes(nextBranchID, graph.DirectionOutbound),
+							branchIdx: 0,
+						})
+					} else if onStack.Contains(nextBranchID) {
+						// Branch is on the traversal stack; hence it is also in the current SCC
+						lowLinks[nextCursor.id] = min(lowLinks[nextCursor.id], visitedIndex[nextBranchID])
 					}
+				} else {
+					// Finished visiting branches; exiting node
+					dfsDescentStack = dfsDescentStack[:len(dfsDescentStack)-1]
 
-					stronglyConnectedComponents = append(stronglyConnectedComponents, scc)
+					if lowLinks[nextCursor.id] == visitedIndex[nextCursor.id] {
+						var (
+							scc   = cardinality.NewBitmap64()
+							sccID = uint64(len(stronglyConnectedComponents))
+						)
+
+						for {
+							// Unwind the stack to the root of the component
+							currentNode := stack[len(stack)-1]
+							stack = stack[:len(stack)-1]
+
+							onStack.Remove(currentNode)
+
+							scc.Add(currentNode)
+
+							// Reverse index origin node to SCC
+							nodeToSCCIndex[currentNode] = sccID
+
+							if currentNode == nextCursor.id {
+								break
+							}
+						}
+
+						stronglyConnectedComponents = append(stronglyConnectedComponents, scc)
+					}
 				}
 			}
 		}
 
-		return true
+		return util.IsContextLive(ctx)
 	})
 
 	return stronglyConnectedComponents, nodeToSCCIndex
@@ -260,9 +259,9 @@ func (s ComponentGraph) OriginReachable(startID, endID uint64) bool {
 	return s.ComponentReachable(startComponent, endComponent)
 }
 
-func NewComponentGraph(originGraph container.DirectedGraph) ComponentGraph {
+func NewComponentGraph(ctx context.Context, originGraph container.DirectedGraph) ComponentGraph {
 	var (
-		componentMembers, memberComponentLookup = StronglyConnectedComponents(originGraph)
+		componentMembers, memberComponentLookup = StronglyConnectedComponents(ctx, originGraph)
 		componentDigraph                        = container.NewAdjacencyMapGraph()
 		nextEdgeID                              = uint64(1)
 	)
@@ -283,7 +282,7 @@ func NewComponentGraph(originGraph container.DirectedGraph) ComponentGraph {
 				nextEdgeID += 1
 			}
 
-			return true
+			return util.IsContextLive(ctx)
 		})
 
 		originGraph.EachAdjacentNode(node, graph.DirectionOutbound, func(adjacent uint64) bool {
@@ -292,10 +291,10 @@ func NewComponentGraph(originGraph container.DirectedGraph) ComponentGraph {
 				nextEdgeID += 1
 			}
 
-			return true
+			return util.IsContextLive(ctx)
 		})
 
-		return true
+		return util.IsContextLive(ctx)
 	})
 
 	return ComponentGraph{

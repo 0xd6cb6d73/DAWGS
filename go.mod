@@ -15,8 +15,6 @@ require (
 	github.com/jackc/pgx/v5 v5.7.6
 	github.com/neo4j/neo4j-go-driver/v5 v5.28.4
 	github.com/stretchr/testify v1.11.1
-	golang.org/x/exp v0.0.0-20251209150349-8475f28825e9
-	github.com/specterops/dawgs v0.3.1
 )
 
 require (
@@ -32,6 +30,7 @@ require (
 	github.com/mschoch/smat v0.2.0 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	golang.org/x/crypto v0.46.0 // indirect
+	golang.org/x/exp v0.0.0-20251209150349-8475f28825e9 // indirect
 	golang.org/x/sync v0.19.0 // indirect
 	golang.org/x/text v0.32.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect

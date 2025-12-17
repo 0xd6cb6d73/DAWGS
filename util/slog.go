@@ -24,3 +24,8 @@ func SLogMeasure(msg string, args ...any) func(args ...any) {
 		slog.Info(msg, exitArgs...)
 	}
 }
+
+func SLogError(msg string, err error, args ...any) {
+	allArgs := append([]any{slog.String("err", err.Error())}, args...)
+	slog.Error(msg, allArgs...)
+}

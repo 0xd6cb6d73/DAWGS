@@ -1,8 +1,6 @@
 package container
 
 import (
-	"fmt"
-
 	"github.com/gammazero/deque"
 	"github.com/specterops/dawgs/cardinality"
 	"github.com/specterops/dawgs/graph"
@@ -27,8 +25,6 @@ func (s KindMap) FindFirst(id uint64) graph.Kind {
 			return kind
 		}
 	}
-
-	panic(fmt.Sprintf("Can't find kind for edge ID %d", id))
 
 	return nil
 }
